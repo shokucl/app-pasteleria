@@ -49,6 +49,13 @@ except Exception as e:
     inventario=[]
 df_inv=pd.DataFrame(inventario)
 try:
+    df_cf_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Costos_Fijos",ttl=600).dropna(how="all")
+    costos_fijos=df_cf_raw.to_dict(orient="records")
+    costos_fijos_mensuales=sum(float(cf.get("Valor",0)) for cf in costos_fijos if cf.get("Ciclo","Mensual")=="Mensual")
+except:
+    costos_fijos=[]
+    costos_fijos_mensuales=0
+try:
     df_recetas_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Recetas",ttl=600).dropna(how="all")
 except Exception as e:
     st.error(f"Error en Recetas: {e}")
@@ -60,8 +67,10 @@ if not df_recetas_raw.empty:
         if r_name not in recetas:
             r_cant=float(fila["Rendimiento_Cantidad"]) if "Rendimiento_Cantidad" in fila.index and pd.notnull(fila["Rendimiento_Cantidad"]) else (int(fila["Porciones"]) if "Porciones" in fila.index and pd.notnull(fila["Porciones"]) else 1.0)
             r_uni=fila["Rendimiento_Unidad"] if "Rendimiento_Unidad" in fila.index and pd.notnull(fila["Rendimiento_Unidad"]) else "porciones"
-            recetas[r_name]={"rendimiento_cantidad":r_cant,"rendimiento_unidad":r_uni,"cif":float(fila["CIF"]) if pd.notnull(fila["CIF"]) else 0.0,"ingredientes":{}}
-        if pd.notnull(fila["Insumo"]) and fila["Insumo"]!="":
+            t_min=float(fila["Tiempo_Minutos"]) if "Tiempo_Minutos" in fila.index and pd.notnull(fila["Tiempo_Minutos"]) else 0.0
+            v_hh=float(fila["Valor_HH"]) if "Valor_HH" in fila.index and pd.notnull(fila["Valor_HH"]) else 0.0
+            recetas[r_name]={"rendimiento_cantidad":r_cant,"rendimiento_unidad":r_uni,"cif":float(fila["CIF"]) if pd.notnull(fila["CIF"]) else 0.0,"tiempo_min":t_min,"valor_hh":v_hh,"ingredientes":{}}
+        if pd.notnull(fila["Insumo"]) and str(fila["Insumo"]).strip()!="":
             recetas[r_name]["ingredientes"][fila["Insumo"]]={"cantidad":float(fila["Cantidad"]),"unidad":fila["Unidad"]}
 try:
     df_ventas_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Ventas",ttl=600).dropna(how="all")
@@ -71,20 +80,31 @@ try:
 except Exception as e:
     st.error(f"Error en Ventas: {e}")
     ventas=[]
+try:
+    df_ve_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Ventas_Eliminadas",ttl=600).dropna(how="all")
+    ventas_eliminadas=df_ve_raw.to_dict(orient="records")
+except:
+    ventas_eliminadas=[]
 def actualizar_insumos_cloud(nuevo_inv):
     conn.update(spreadsheet=URL_EXCEL,worksheet="Insumos",data=pd.DataFrame(nuevo_inv))
+    st.cache_data.clear()
+def actualizar_cf_cloud(nuevos_cf):
+    conn.update(spreadsheet=URL_EXCEL,worksheet="Costos_Fijos",data=pd.DataFrame(nuevos_cf))
     st.cache_data.clear()
 def actualizar_recetas_cloud(nuevas_rec):
     filas=[]
     for r_name,r_info in nuevas_rec.items():
         if not r_info["ingredientes"]:
-            filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Insumo":"","Cantidad":0,"Unidad":""})
+            filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Tiempo_Minutos":r_info.get("tiempo_min",0),"Valor_HH":r_info.get("valor_hh",0),"Insumo":"","Cantidad":0,"Unidad":""})
         for ing_name,ing_data in r_info["ingredientes"].items():
-            filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Insumo":ing_name,"Cantidad":ing_data["cantidad"],"Unidad":ing_data["unidad"]})
+            filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Tiempo_Minutos":r_info.get("tiempo_min",0),"Valor_HH":r_info.get("valor_hh",0),"Insumo":ing_name,"Cantidad":ing_data["cantidad"],"Unidad":ing_data["unidad"]})
     conn.update(spreadsheet=URL_EXCEL,worksheet="Recetas",data=pd.DataFrame(filas))
     st.cache_data.clear()
 def actualizar_ventas_cloud(nuevas_ven):
     conn.update(spreadsheet=URL_EXCEL,worksheet="Ventas",data=pd.DataFrame(nuevas_ven))
+    st.cache_data.clear()
+def actualizar_ventas_eliminadas_cloud(nuevas_ven_el):
+    conn.update(spreadsheet=URL_EXCEL,worksheet="Ventas_Eliminadas",data=pd.DataFrame(nuevas_ven_el))
     st.cache_data.clear()
 def calcular_costo_insumo(insumo_obj,cant_receta,unidad_receta):
     c_uni=insumo_obj['Costo_Unitario']
@@ -98,18 +118,19 @@ def obtener_costos_totales(r_name):
     if r_name not in recetas: return 0,0
     r_data=recetas[r_name]
     costo_directo=0
-    if df_inv.empty: return 0,0
-    for insumo_completo,datos_ing in r_data['ingredientes'].items():
-        nombre_base=insumo_completo.split(" (")[0] if " (" in insumo_completo else insumo_completo
-        filas_coincidentes=df_inv[df_inv['Nombre']==nombre_base]
-        if not filas_coincidentes.empty:
-            insumo_obj=filas_coincidentes.iloc[-1].to_dict()
-            costo_directo+=calcular_costo_insumo(insumo_obj,datos_ing['cantidad'],datos_ing['unidad'])
-    total=costo_directo+r_data['cif']
+    if not df_inv.empty:
+        for insumo_completo,datos_ing in r_data['ingredientes'].items():
+            nombre_base=insumo_completo.split(" (")[0] if " (" in insumo_completo else insumo_completo
+            filas_coincidentes=df_inv[df_inv['Nombre']==nombre_base]
+            if not filas_coincidentes.empty:
+                insumo_obj=filas_coincidentes.iloc[-1].to_dict()
+                costo_directo+=calcular_costo_insumo(insumo_obj,datos_ing['cantidad'],datos_ing['unidad'])
+    costo_mo=(r_data.get("tiempo_min",0)/60.0)*r_data.get("valor_hh",0)
+    total=costo_directo+r_data['cif']+costo_mo
     costo_unitario_rendimiento=total/r_data['rendimiento_cantidad'] if r_data['rendimiento_cantidad']>0 else total
     return total,costo_unitario_rendimiento
 st.sidebar.button("Cerrar Sesión",on_click=lambda:st.session_state.pop("autenticado",None))
-menu=st.sidebar.radio("Navegación",["Inicio","Insumos","Fichas Técnicas","Rentabilidad","Ventas y Caja"])
+menu=st.sidebar.radio("Navegación",["Inicio","Costos Fijos","Insumos","Fichas Técnicas","Rentabilidad","Ventas y Caja"])
 if menu=="Inicio":
     st.header("Panel de Control")
     if ventas:
@@ -118,16 +139,20 @@ if menu=="Inicio":
         df_v["Ganancia Neta ($)"]=pd.to_numeric(df_v["Ganancia Neta ($)"],errors='coerce').fillna(0)
         cobrado_real=df_v[df_v["Estado"]=="Pagado"]["Total Cobrado ($)"].sum()
         pendiente_cobro=df_v[df_v["Estado"]=="Pendiente"]["Total Cobrado ($)"].sum()
-        ganancia_real=df_v[df_v["Estado"]=="Pagado"]["Ganancia Neta ($)"].sum()
+        utilidad_bruta=df_v[df_v["Estado"]=="Pagado"]["Ganancia Neta ($)"].sum()
         efectivo_total=df_v[(df_v["Método de Pago"]=="Efectivo")&(df_v["Estado"]=="Pagado")]["Total Cobrado ($)"].sum()
         transfer_total=df_v[(df_v["Método de Pago"]=="Transferencia")&(df_v["Estado"]=="Pagado")]["Total Cobrado ($)"].sum()
     else:
-        cobrado_real=pendiente_cobro=ganancia_real=efectivo_total=transfer_total=0
+        cobrado_real=pendiente_cobro=utilidad_bruta=efectivo_total=transfer_total=0
+    utilidad_neta=utilidad_bruta-costos_fijos_mensuales
     st.write("Estado de Caja General")
     c1,c2,c3=st.columns(3)
-    c1.metric("Caja",f"${cobrado_real:,.0f}")
+    c1.metric("Caja (Ventas Realizadas)",f"${cobrado_real:,.0f}")
     c2.metric("Por Cobrar",f"${pendiente_cobro:,.0f}",delta_color="inverse")
-    c3.metric("Ganancia Neta",f"${ganancia_real:,.0f}")
+    c3.metric("Costos Fijos Mensuales",f"${costos_fijos_mensuales:,.0f}",delta_color="inverse")
+    c4,c5=st.columns(2)
+    c4.metric("Utilidad Bruta",f"${utilidad_bruta:,.0f}")
+    c5.metric("Utilidad Neta Operativa",f"${utilidad_neta:,.0f}")
     st.divider()
     inv_total=sum(float(i.get('Costo_Compra',0)) for i in inventario)
     stock_actual_val=sum(float(i.get('Stock_Actual',0))*float(i.get('Costo_Unitario',0)) for i in inventario)
@@ -151,6 +176,42 @@ if menu=="Inicio":
         st.write("Pagos")
         st.write(f"Efectivo: ${efectivo_total:,.0f}")
         st.write(f"Transferencia: ${transfer_total:,.0f}")
+elif menu=="Costos Fijos":
+    st.header("Gestión de Costos Fijos")
+    with st.form("f_cf_nuevo",clear_on_submit=True):
+        n_cf=st.text_input("Nombre (ej. Luz, Agua, Arriendo)")
+        c_cf,c_cic=st.columns(2)
+        with c_cf: v_cf=st.number_input("Valor ($)",min_value=0)
+        with c_cic: cic_cf=st.selectbox("Ciclo",["Mensual","Anual","Semanal"])
+        if st.form_submit_button("Agregar Costo") and n_cf:
+            costos_fijos.append({"Nombre":n_cf,"Valor":v_cf,"Ciclo":cic_cf,"Última_Actualización":hoy})
+            actualizar_cf_cloud(costos_fijos)
+            st.rerun()
+    if costos_fijos:
+        st.divider()
+        st.dataframe(pd.DataFrame(costos_fijos),hide_index=True)
+        col_ed_cf,col_el_cf=st.columns(2)
+        with col_ed_cf:
+            with st.expander("Editar Costo Fijo"):
+                s_cf=st.selectbox("Seleccionar para editar",[f"{x}: {c['Nombre']}" for x,c in enumerate(costos_fijos)])
+                idx_cf=int(s_cf.split(":")[0])
+                it_cf=costos_fijos[idx_cf]
+                with st.form("f_cf_ed",clear_on_submit=True):
+                    e_n_cf=st.text_input("Nombre",value=it_cf["Nombre"])
+                    e_v_cf=st.number_input("Valor ($)",min_value=0,value=int(it_cf.get("Valor",0)))
+                    ou_c=["Mensual","Anual","Semanal"]
+                    e_c_cf=st.selectbox("Ciclo",ou_c,index=ou_c.index(it_cf.get("Ciclo","Mensual")) if it_cf.get("Ciclo","Mensual") in ou_c else 0)
+                    if st.form_submit_button("Guardar Cambios"):
+                        costos_fijos[idx_cf].update({"Nombre":e_n_cf,"Valor":e_v_cf,"Ciclo":e_c_cf,"Última_Actualización":hoy})
+                        actualizar_cf_cloud(costos_fijos)
+                        st.rerun()
+        with col_el_cf:
+            with st.expander("Eliminar Costo Fijo"):
+                b_cf=st.selectbox("Seleccionar para borrar",[c['Nombre'] for c in costos_fijos])
+                if st.button("Eliminar Definitivamente"):
+                    costos_fijos=[c for c in costos_fijos if c['Nombre']!=b_cf]
+                    actualizar_cf_cloud(costos_fijos)
+                    st.rerun()
 elif menu=="Insumos":
     st.header("Ingreso de Materias Primas")
     foto_boleta=st.file_uploader("Sube boleta",type=["jpg","png","jpeg"])
@@ -270,16 +331,19 @@ elif menu=="Fichas Técnicas":
         c1,c2=st.columns(2)
         with c1: r_cant=st.number_input("Rendimiento",min_value=0.01,value=1.0)
         with c2: r_uni=st.selectbox("Unidad",["unidades","gr","kg","porciones"])
-        cif=st.number_input("CIF ($)",min_value=0)
+        c3,c4,c5=st.columns(3)
+        with c3: cif=st.number_input("CIF Variable ($)",min_value=0)
+        with c4: t_min=st.number_input("H/H: Tiempo (Minutos)",min_value=0)
+        with c5: v_hh=st.number_input("H/H: Valor Hora ($)",min_value=0)
         if st.form_submit_button("Crear") and n_r:
-            recetas[n_r]={'rendimiento_cantidad':r_cant,'rendimiento_unidad':r_uni,'cif':cif,'ingredientes':{}}
+            recetas[n_r]={'rendimiento_cantidad':r_cant,'rendimiento_unidad':r_uni,'cif':cif,'tiempo_min':t_min,'valor_hh':v_hh,'ingredientes':{}}
             actualizar_recetas_cloud(recetas)
             st.rerun()
     if recetas:
         st.divider()
         r_sel=st.selectbox("Editar",list(recetas.keys()))
         r_data=recetas[r_sel]
-        with st.expander("Editar Generales"):
+        with st.expander("Editar Costos y Tiempos"):
             with st.form("f_edit_base",clear_on_submit=True):
                 n_nom=st.text_input("Nombre",value=r_sel)
                 c1,c2=st.columns(2)
@@ -288,10 +352,13 @@ elif menu=="Fichas Técnicas":
                     ou=["unidades","gr","kg","porciones"]
                     ua=r_data.get('rendimiento_unidad','porciones')
                     n_uni=st.selectbox("Unidad",ou,index=ou.index(ua) if ua in ou else 0)
-                n_cif=st.number_input("CIF ($)",min_value=0,value=int(r_data['cif']))
+                c3,c4,c5=st.columns(3)
+                with c3: n_cif=st.number_input("CIF Variable ($)",min_value=0,value=int(r_data.get('cif',0)))
+                with c4: n_tmin=st.number_input("Tiempo (Min)",min_value=0,value=int(r_data.get('tiempo_min',0)))
+                with c5: n_vhh=st.number_input("Valor Hora ($)",min_value=0,value=int(r_data.get('valor_hh',0)))
                 if st.form_submit_button("Guardar"):
                     if n_nom!=r_sel: recetas[n_nom]=recetas.pop(r_sel)
-                    recetas[n_nom].update({'rendimiento_cantidad':n_cant,'rendimiento_unidad':n_uni,'cif':n_cif})
+                    recetas[n_nom].update({'rendimiento_cantidad':n_cant,'rendimiento_unidad':n_uni,'cif':n_cif,'tiempo_min':n_tmin,'valor_hh':n_vhh})
                     actualizar_recetas_cloud(recetas)
                     st.rerun()
         if r_data['ingredientes']: st.dataframe(pd.DataFrame([{'Insumo':k,'Cantidad':f"{v['cantidad']} {v['unidad']}"} for k,v in r_data['ingredientes'].items()]),hide_index=True)
@@ -308,12 +375,14 @@ elif menu=="Rentabilidad":
     st.header("Análisis de Precios")
     if recetas:
         p_sel=st.selectbox("Producto",list(recetas.keys()))
+        aplicar_iva=st.checkbox("Formalizar: Agregar 19% IVA")
         margen=st.slider("Margen (%)",10,80,40)/100
         t,p=obtener_costos_totales(p_sel)
+        factor_impuesto=1.19 if aplicar_iva else 1.0
         c1,c2,c3=st.columns(3)
-        c1.metric("Costo Total",f"${t:,.0f}")
-        c2.metric("Sugerido Completa",f"${t/(1-margen):,.0f}")
-        c3.metric(f"Sugerido ({recetas[p_sel].get('rendimiento_unidad','unidad')})",f"${p/(1-margen):,.0f}")
+        c1.metric("Costo Total Producción",f"${t:,.0f}")
+        c2.metric("Sugerido Completa",f"${(t/(1-margen))*factor_impuesto:,.0f}")
+        c3.metric(f"Sugerido ({recetas[p_sel].get('rendimiento_unidad','unidad')})",f"${(p/(1-margen))*factor_impuesto:,.0f}")
 elif menu=="Ventas y Caja":
     st.header("Registro de Ventas")
     if not recetas: st.info("Configura productos en Fichas Técnicas.")
@@ -362,7 +431,7 @@ elif menu=="Ventas y Caja":
                             st.success("¡Venta interpretada! Revisa el formulario abajo.")
                         except Exception as e: st.error(f"Error de IA: {e}")
         st.divider()
-        s_id=len(ventas)
+        s_id=str(date.today().strftime('%Y%m%d'))+str(len(ventas)+len(ventas_eliminadas))
         with st.form("f_v",clear_on_submit=True):
             fecha=st.date_input("Fecha",date.today())
             d_p=st.session_state.get('v_prod',list(recetas.keys())[0])
@@ -399,3 +468,36 @@ elif menu=="Ventas y Caja":
         if ventas:
             st.write("Historial")
             st.dataframe(pd.DataFrame(ventas),hide_index=True)
+            with st.expander("Anular Venta"):
+                s_anul=st.selectbox("Seleccionar Venta a Eliminar",[f"ID: {v['ID Venta']} - {v['Producto']} ({v['Fecha']})" for v in ventas])
+                id_anular=s_anul.split(" - ")[0].replace("ID: ","")
+                restaurar_stock=st.checkbox("Reintegrar ingredientes al inventario",value=True)
+                if st.button("Confirmar Anulación",type="primary"):
+                    venta_obj=next((v for v in ventas if str(v["ID Venta"])==id_anular),None)
+                    if venta_obj:
+                        if restaurar_stock and venta_obj["Producto"] in recetas:
+                            p_v=venta_obj["Producto"]
+                            f_v=venta_obj["Formato"]
+                            cant=venta_obj["Cantidad"]
+                            f_rec=cant if f_v=="Entero" else cant/recetas[p_v].get('rendimiento_cantidad',1.0)
+                            for insumo_completo,datos_ing in recetas[p_v]['ingredientes'].items():
+                                n_base=insumo_completo.split(" (")[0] if " (" in insumo_completo else insumo_completo
+                                for i in reversed(range(len(inventario))):
+                                    if inventario[i]['Nombre']==n_base:
+                                        cu=datos_ing['cantidad']*f_rec
+                                        ur=datos_ing['unidad']
+                                        ui=inventario[i]['Unidad']
+                                        if ui=="kg" and ur=="gr": cu/=1000
+                                        elif ui=="gr" and ur=="kg": cu*=1000
+                                        elif ui=="L" and ur=="ml": cu/=1000
+                                        elif ui=="ml" and ur=="L": cu*=1000
+                                        inventario[i]['Stock_Actual']=float(inventario[i].get('Stock_Actual',0))+cu
+                                        break
+                            actualizar_insumos_cloud(inventario)
+                        ventas=[v for v in ventas if str(v["ID Venta"])!=id_anular]
+                        venta_obj["Estado"]="Anulado"
+                        venta_obj["Fecha_Anulacion"]=hoy
+                        ventas_eliminadas.append(venta_obj)
+                        actualizar_ventas_cloud(ventas)
+                        actualizar_ventas_eliminadas_cloud(ventas_eliminadas)
+                        st.rerun()
