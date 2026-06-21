@@ -363,8 +363,7 @@ elif menu=="Insumos":
                         inicio = res_txt.find('[')
                         fin = res_txt.rfind(']')
                         if inicio != -1 and fin != -1: texto_json = res_txt[inicio:fin+1]
-                        else: texto_json = res_txt.replace("```json","").replace("
-```","").strip()
+                        else: texto_json = res_txt.replace("```json","").replace("```","").strip()
                         datos_ia=json.loads(texto_json)
                         if isinstance(datos_ia,dict): datos_ia=[datos_ia]
                         for d in datos_ia:
