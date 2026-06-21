@@ -3,6 +3,7 @@ import pandas as pd
 import hmac
 import json
 import base64
+import time
 from datetime import date
 from streamlit_gsheets import GSheetsConnection
 from groq import Groq
@@ -37,12 +38,14 @@ def normalizar_unidad(u):
     if u in ['paquete','pqte','paq']: return 'paquete'
     return "unidades"
 def optimizar_texto(txt):
-    return " ".join(str(txt).split()).title() if pd.notnull(txt) else ""
+    return " ".join(str(txt).split()).capitalize() if pd.notnull(txt) else ""
 hoy=str(date.today())
 conn=st.connection("gsheets",type=GSheetsConnection)
 try:
     df_insumos_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Insumos",ttl=600).dropna(how="all")
     if "Marca" not in df_insumos_raw.columns: df_insumos_raw["Marca"]="Genérico"
+    if "Nombre" in df_insumos_raw.columns: df_insumos_raw["Nombre"]=df_insumos_raw["Nombre"].apply(optimizar_texto)
+    if "Marca" in df_insumos_raw.columns: df_insumos_raw["Marca"]=df_insumos_raw["Marca"].apply(optimizar_texto)
     if "Stock_Actual" not in df_insumos_raw.columns: df_insumos_raw["Stock_Actual"]=df_insumos_raw["Cantidad_Compra"]
     if "Última_Compra" not in df_insumos_raw.columns: df_insumos_raw["Última_Compra"]=hoy
     if "Caducidad" not in df_insumos_raw.columns: df_insumos_raw["Caducidad"]=hoy
@@ -52,6 +55,7 @@ except: inventario=[]
 df_inv=pd.DataFrame(inventario)
 try:
     df_cf_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Costos_Fijos",ttl=600).dropna(how="all")
+    if not df_cf_raw.empty and "Nombre" in df_cf_raw.columns: df_cf_raw["Nombre"]=df_cf_raw["Nombre"].apply(optimizar_texto)
     costos_fijos=df_cf_raw.to_dict(orient="records")
     costos_fijos_mensuales=sum(float(cf.get("Valor",0)) for cf in costos_fijos if cf.get("Ciclo","Mensual")=="Mensual")
 except:
@@ -59,6 +63,9 @@ except:
     costos_fijos_mensuales=0
 try:
     df_recetas_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Recetas",ttl=600).dropna(how="all")
+    if not df_recetas_raw.empty:
+        if "Nombre_Receta" in df_recetas_raw.columns: df_recetas_raw["Nombre_Receta"]=df_recetas_raw["Nombre_Receta"].apply(optimizar_texto)
+        if "Insumo" in df_recetas_raw.columns: df_recetas_raw["Insumo"]=df_recetas_raw["Insumo"].apply(optimizar_texto)
 except: df_recetas_raw=pd.DataFrame()
 recetas={}
 if not df_recetas_raw.empty:
@@ -84,6 +91,7 @@ try:
 except: ventas_eliminadas=[]
 try:
     df_cli_raw=conn.read(spreadsheet=URL_EXCEL,worksheet="Clientes",ttl=600).dropna(how="all")
+    if not df_cli_raw.empty and "Nombre" in df_cli_raw.columns: df_cli_raw["Nombre"]=df_cli_raw["Nombre"].apply(optimizar_texto)
     clientes=df_cli_raw.to_dict(orient="records")
 except: clientes=[]
 try:
@@ -91,9 +99,11 @@ try:
     mermas=df_mer_raw.to_dict(orient="records")
 except: mermas=[]
 def actualizar_insumos_cloud(nuevo_inv):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Insumos",data=pd.DataFrame(nuevo_inv))
     st.cache_data.clear()
 def actualizar_cf_cloud(nuevos_cf):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Costos_Fijos",data=pd.DataFrame(nuevos_cf))
     st.cache_data.clear()
 def actualizar_recetas_cloud(nuevas_rec):
@@ -103,18 +113,23 @@ def actualizar_recetas_cloud(nuevas_rec):
             filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Tiempo_Minutos":r_info.get("tiempo_min",0),"Valor_HH":r_info.get("valor_hh",0),"Insumo":"","Cantidad":0,"Unidad":""})
         for ing_name,ing_data in r_info["ingredientes"].items():
             filas.append({"Nombre_Receta":r_name,"Rendimiento_Cantidad":r_info["rendimiento_cantidad"],"Rendimiento_Unidad":r_info["rendimiento_unidad"],"CIF":r_info["cif"],"Tiempo_Minutos":r_info.get("tiempo_min",0),"Valor_HH":r_info.get("valor_hh",0),"Insumo":ing_name,"Cantidad":ing_data["cantidad"],"Unidad":ing_data["unidad"]})
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Recetas",data=pd.DataFrame(filas))
     st.cache_data.clear()
 def actualizar_ventas_cloud(nuevas_ven):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Ventas",data=pd.DataFrame(nuevas_ven))
     st.cache_data.clear()
 def actualizar_ventas_eliminadas_cloud(nuevas_ven_el):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Ventas_Eliminadas",data=pd.DataFrame(nuevas_ven_el))
     st.cache_data.clear()
 def actualizar_clientes_cloud(nuevos_cli):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Clientes",data=pd.DataFrame(nuevos_cli))
     st.cache_data.clear()
 def actualizar_mermas_cloud(nuevas_mer):
+    time.sleep(1)
     conn.update(spreadsheet=URL_EXCEL,worksheet="Mermas",data=pd.DataFrame(nuevas_mer))
     st.cache_data.clear()
 def calcular_costo_insumo(insumo_obj,cant_receta,unidad_receta):
@@ -177,7 +192,7 @@ if menu=="Inicio":
     cm3.metric("Mermas Registradas",f"${merma_reg_total:,.0f}",delta_color="inverse")
     cm4.metric("Merma No Identificada",f"${merma_teorica:,.0f}",delta_color="inverse")
     st.divider()
-    col_al,col_gr=st.columns([1,2])
+    col_al,col_gr=st.columns([1,1])
     with col_al:
         st.write("Alertas de Operación")
         if inventario:
@@ -189,17 +204,17 @@ if menu=="Inicio":
             vencidos=df_alerta[df_alerta["Caducidad"]<=pd.to_datetime(hoy)]
             if not criticos.empty:
                 st.error("Stock Crítico")
-                st.dataframe(criticos[["Nombre","Stock_Actual","Stock_Minimo"]],hide_index=True)
+                st.dataframe(criticos[["Nombre","Stock_Actual","Stock_Minimo"]],hide_index=True,use_container_width=True)
             if not vencidos.empty:
                 st.error("Vencidos o Vencen Hoy")
-                st.dataframe(vencidos[["Nombre","Stock_Actual","Caducidad"]],hide_index=True)
+                st.dataframe(vencidos[["Nombre","Stock_Actual","Caducidad"]],hide_index=True,use_container_width=True)
         with st.expander("Registrar Merma / Pérdida"):
             with st.form("f_merma",clear_on_submit=True):
                 m_tipo=st.selectbox("Tipo",["Insumo","Producto Terminado"])
                 if m_tipo=="Insumo": m_item=st.selectbox("Item",sorted(list(set([i['Nombre'] for i in inventario])))) if inventario else st.selectbox("Item",[])
                 else: m_item=st.selectbox("Item",list(recetas.keys())) if recetas else st.selectbox("Item",[])
                 m_cant=st.number_input("Cantidad Perdida",min_value=0.1)
-                m_mot=st.text_input("Motivo (ej. Caducidad, Error de cocción)")
+                m_mot=st.text_input("Motivo")
                 if st.form_submit_button("Registrar"):
                     c_perdido=0
                     if m_tipo=="Insumo":
@@ -222,7 +237,7 @@ if menu=="Inicio":
             df_g["Fecha"]=pd.to_datetime(df_g["Fecha"],errors='coerce')
             df_g["Total Cobrado ($)"]=pd.to_numeric(df_g["Total Cobrado ($)"],errors='coerce').fillna(0)
             df_g["Mes"]=df_g["Fecha"].dt.to_period("M").astype(str)
-            st.bar_chart(df_g.groupby("Mes")[["Total Cobrado ($)"]].sum())
+            st.bar_chart(df_g.groupby("Mes")[["Total Cobrado ($)"]].sum(),use_container_width=True)
         else: st.info("No hay ventas suficientes para proyectar.")
 elif menu=="Clientes (CRM)":
     st.header("Gestión de Clientes y Fidelización")
@@ -231,9 +246,12 @@ elif menu=="Clientes (CRM)":
         tel_cli=st.text_input("Teléfono / WhatsApp")
         cumple_cli=st.date_input("Fecha de Cumpleaños / Aniversario")
         if st.form_submit_button("Agregar Cliente") and n_cli:
-            clientes.append({"Nombre":optimizar_texto(n_cli),"Teléfono":tel_cli,"Cumpleaños":str(cumple_cli),"Total_Comprado":0,"Última_Compra":""})
-            actualizar_clientes_cloud(clientes)
-            st.rerun()
+            n_cli_opt=optimizar_texto(n_cli)
+            if any(c['Nombre']==n_cli_opt for c in clientes): st.error("Registro duplicado.")
+            else:
+                clientes.append({"Nombre":n_cli_opt,"Teléfono":tel_cli,"Cumpleaños":str(cumple_cli),"Total_Comprado":0,"Última_Compra":""})
+                actualizar_clientes_cloud(clientes)
+                st.rerun()
     if clientes:
         st.divider()
         if ventas:
@@ -244,7 +262,7 @@ elif menu=="Clientes (CRM)":
                 compras_cli=df_v_cli[df_v_cli["Observaciones"].str.contains(c["Nombre"],na=False,case=False)]
                 clientes[idx]["Total_Comprado"]=compras_cli["Total Cobrado ($)"].sum()
                 if not compras_cli.empty: clientes[idx]["Última_Compra"]=compras_cli.iloc[-1]["Fecha"]
-        st.dataframe(pd.DataFrame(clientes),hide_index=True,column_config={"Total_Comprado":st.column_config.NumberColumn(format="$%d")})
+        st.dataframe(pd.DataFrame(clientes),hide_index=True,use_container_width=True,column_config={"Total_Comprado":st.column_config.NumberColumn(format="$%d")})
         with st.expander("Eliminar Cliente"):
             b_cli=st.selectbox("Seleccionar para borrar",[c['Nombre'] for c in clientes])
             if st.button("Eliminar Definitivamente"):
@@ -277,7 +295,7 @@ elif menu=="Cotizador":
                 items_cot.append({"Producto":r["Producto"],"Cantidad":r["Cantidad"],"Formato":uni_txt,"Subtotal Sugerido":subt})
         if items_cot:
             st.success(f"Cotización formal para: {c_sel} (Evento: {f_ev})")
-            st.dataframe(pd.DataFrame(items_cot),hide_index=True,column_config={"Subtotal Sugerido":st.column_config.NumberColumn(format="$%d")})
+            st.dataframe(pd.DataFrame(items_cot),hide_index=True,use_container_width=True,column_config={"Subtotal Sugerido":st.column_config.NumberColumn(format="$%d")})
             c1,c2,c3=st.columns(3)
             c1.metric("Costo Producción Total",f"${tot_costo:,.0f}")
             c2.metric("Descuento Aplicado",f"${desc_cot:,.0f}",delta_color="inverse")
@@ -291,12 +309,15 @@ elif menu=="Costos Fijos":
         with c_cf: v_cf=st.number_input("Valor ($)",min_value=0)
         with c_cic: cic_cf=st.selectbox("Ciclo",["Mensual","Anual","Semanal"])
         if st.form_submit_button("Agregar Costo") and n_cf:
-            costos_fijos.append({"Nombre":optimizar_texto(n_cf),"Valor":v_cf,"Ciclo":cic_cf,"Última_Actualización":hoy})
-            actualizar_cf_cloud(costos_fijos)
-            st.rerun()
+            n_cf_opt=optimizar_texto(n_cf)
+            if any(c['Nombre']==n_cf_opt for c in costos_fijos): st.error("Registro duplicado.")
+            else:
+                costos_fijos.append({"Nombre":n_cf_opt,"Valor":v_cf,"Ciclo":cic_cf,"Última_Actualización":hoy})
+                actualizar_cf_cloud(costos_fijos)
+                st.rerun()
     if costos_fijos:
         st.divider()
-        st.dataframe(pd.DataFrame(costos_fijos),hide_index=True,column_config={"Valor":st.column_config.NumberColumn("Valor",format="$%d")})
+        st.dataframe(pd.DataFrame(costos_fijos),hide_index=True,use_container_width=True,column_config={"Valor":st.column_config.NumberColumn("Valor",format="$%d")})
         col_ed_cf,col_el_cf=st.columns(2)
         with col_ed_cf:
             with st.expander("Editar Costo Fijo"):
@@ -342,7 +363,8 @@ elif menu=="Insumos":
                         inicio = res_txt.find('[')
                         fin = res_txt.rfind(']')
                         if inicio != -1 and fin != -1: texto_json = res_txt[inicio:fin+1]
-                        else: texto_json = res_txt.replace("```json","").replace("```","").strip()
+                        else: texto_json = res_txt.replace("```json","").replace("
+```","").strip()
                         datos_ia=json.loads(texto_json)
                         if isinstance(datos_ia,dict): datos_ia=[datos_ia]
                         for d in datos_ia:
@@ -411,11 +433,15 @@ elif menu=="Insumos":
             with c1: caduc=st.date_input("Fecha Caducidad")
             with c2: s_min=st.number_input("Stock Mínimo (Punto Reorden)",min_value=0.0,value=0.0)
             if st.form_submit_button("Guardar Manual") and nombre:
-                actualizar_insumos_cloud(inventario+[{"Nombre":optimizar_texto(nombre),"Marca":optimizar_texto(marca) or "Genérico","Costo_Compra":costo,"Cantidad_Compra":cantidad,"Unidad":normalizar_unidad(unidad),"Costo_Unitario":costo/cantidad,"Stock_Actual":cantidad,"Última_Compra":hoy,"Caducidad":str(caduc),"Stock_Minimo":s_min}])
-                st.rerun()
+                n_opt=optimizar_texto(nombre)
+                m_opt=optimizar_texto(marca) or "Genérico"
+                if any(i['Nombre']==n_opt and i['Marca']==m_opt for i in inventario): st.error("Registro duplicado.")
+                else:
+                    actualizar_insumos_cloud(inventario+[{"Nombre":n_opt,"Marca":m_opt,"Costo_Compra":costo,"Cantidad_Compra":cantidad,"Unidad":normalizar_unidad(unidad),"Costo_Unitario":costo/cantidad,"Stock_Actual":cantidad,"Última_Compra":hoy,"Caducidad":str(caduc),"Stock_Minimo":s_min}])
+                    st.rerun()
     st.divider()
     if inventario:
-        st.dataframe(pd.DataFrame(inventario),hide_index=True,column_config={"Costo_Compra":st.column_config.NumberColumn("Costo Compra",format="$%d"),"Costo_Unitario":st.column_config.NumberColumn("Costo Unitario",format="$%d")})
+        st.dataframe(pd.DataFrame(inventario),hide_index=True,use_container_width=True,column_config={"Costo_Compra":st.column_config.NumberColumn("Costo Compra",format="$%d"),"Costo_Unitario":st.column_config.NumberColumn("Costo Unitario",format="$%d")})
         col_ed,col_el=st.columns(2)
         with col_ed:
             with st.expander("Editar"):
@@ -434,9 +460,16 @@ elif menu=="Insumos":
                     e_cad=st.date_input("Caducidad",pd.to_datetime(it_ed.get('Caducidad',hoy)))
                     e_smin=st.number_input("Stock Mínimo",min_value=0.0,value=float(it_ed.get('Stock_Minimo',0)))
                     if st.form_submit_button("Guardar"):
-                        inventario[idx_ed].update({"Nombre":optimizar_texto(en),"Marca":optimizar_texto(em),"Costo_Compra":ec,"Cantidad_Compra":ecan,"Unidad":normalizar_unidad(eu),"Costo_Unitario":ec/ecan if ecan>0 else ec,"Stock_Actual":est,"Caducidad":str(e_cad),"Stock_Minimo":e_smin})
-                        actualizar_insumos_cloud(inventario)
-                        st.rerun()
+                        n_opt=optimizar_texto(en)
+                        m_opt=optimizar_texto(em)
+                        duplicado=False
+                        for x,i in enumerate(inventario):
+                            if x!=idx_ed and i['Nombre']==n_opt and i['Marca']==m_opt: duplicado=True
+                        if duplicado: st.error("Registro duplicado.")
+                        else:
+                            inventario[idx_ed].update({"Nombre":n_opt,"Marca":m_opt,"Costo_Compra":ec,"Cantidad_Compra":ecan,"Unidad":normalizar_unidad(eu),"Costo_Unitario":ec/ecan if ecan>0 else ec,"Stock_Actual":est,"Caducidad":str(e_cad),"Stock_Minimo":e_smin})
+                            actualizar_insumos_cloud(inventario)
+                            st.rerun()
         with col_el:
             with st.expander("Eliminar"):
                 b_sel=st.selectbox("Insumo a borrar",[f"{i['Nombre']} ({i.get('Marca','Genérico')})" for i in inventario])
@@ -455,9 +488,12 @@ elif menu=="Fichas Técnicas":
         with c4: t_min=st.number_input("H/H: Tiempo (Minutos)",min_value=0)
         with c5: v_hh=st.number_input("H/H: Valor Hora ($)",min_value=0)
         if st.form_submit_button("Crear") and n_r:
-            recetas[optimizar_texto(n_r)]={'rendimiento_cantidad':r_cant,'rendimiento_unidad':r_uni,'cif':cif,'tiempo_min':t_min,'valor_hh':v_hh,'ingredientes':{}}
-            actualizar_recetas_cloud(recetas)
-            st.rerun()
+            n_r_opt=optimizar_texto(n_r)
+            if n_r_opt in recetas: st.error("Registro duplicado.")
+            else:
+                recetas[n_r_opt]={'rendimiento_cantidad':r_cant,'rendimiento_unidad':r_uni,'cif':cif,'tiempo_min':t_min,'valor_hh':v_hh,'ingredientes':{}}
+                actualizar_recetas_cloud(recetas)
+                st.rerun()
     if recetas:
         st.divider()
         r_sel=st.selectbox("Editar",list(recetas.keys()))
@@ -477,11 +513,13 @@ elif menu=="Fichas Técnicas":
                 with c5: n_vhh=st.number_input("Valor Hora ($)",min_value=0,value=int(r_data.get('valor_hh',0)))
                 if st.form_submit_button("Guardar"):
                     n_nom_opt=optimizar_texto(n_nom)
-                    if n_nom_opt!=r_sel: recetas[n_nom_opt]=recetas.pop(r_sel)
-                    recetas[n_nom_opt].update({'rendimiento_cantidad':n_cant,'rendimiento_unidad':n_uni,'cif':n_cif,'tiempo_min':n_tmin,'valor_hh':n_vhh})
-                    actualizar_recetas_cloud(recetas)
-                    st.rerun()
-        if r_data['ingredientes']: st.dataframe(pd.DataFrame([{'Insumo':k,'Cantidad':f"{v['cantidad']} {v['unidad']}"} for k,v in r_data['ingredientes'].items()]),hide_index=True)
+                    if n_nom_opt!=r_sel and n_nom_opt in recetas: st.error("Registro duplicado.")
+                    else:
+                        if n_nom_opt!=r_sel: recetas[n_nom_opt]=recetas.pop(r_sel)
+                        recetas[n_nom_opt].update({'rendimiento_cantidad':n_cant,'rendimiento_unidad':n_uni,'cif':n_cif,'tiempo_min':n_tmin,'valor_hh':n_vhh})
+                        actualizar_recetas_cloud(recetas)
+                        st.rerun()
+        if r_data['ingredientes']: st.dataframe(pd.DataFrame([{'Insumo':k,'Cantidad':f"{v['cantidad']} {v['unidad']}"} for k,v in r_data['ingredientes'].items()]),hide_index=True,use_container_width=True)
         if inventario:
             with st.form("f_ing",clear_on_submit=True):
                 nombres_unicos=sorted(list(set([i['Nombre'] for i in inventario])))
@@ -591,7 +629,7 @@ elif menu=="Ventas y Caja":
                 st.rerun()
         if ventas:
             st.write("Historial")
-            st.dataframe(pd.DataFrame(ventas),hide_index=True,column_config={"Total Cobrado ($)":st.column_config.NumberColumn(format="$%d"),"Costo Producción ($)":st.column_config.NumberColumn(format="$%d"),"Ganancia Neta ($)":st.column_config.NumberColumn(format="$%d")})
+            st.dataframe(pd.DataFrame(ventas),hide_index=True,use_container_width=True,column_config={"Total Cobrado ($)":st.column_config.NumberColumn(format="$%d"),"Costo Producción ($)":st.column_config.NumberColumn(format="$%d"),"Ganancia Neta ($)":st.column_config.NumberColumn(format="$%d")})
             with st.expander("Anular Venta"):
                 s_anul=st.selectbox("Seleccionar Venta a Eliminar",[f"ID: {v['ID Venta']} - {v['Producto']} ({v['Fecha']})" for v in ventas])
                 id_anular=s_anul.split(" - ")[0].replace("ID: ","")
